@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notes
+spec:
+  selector:
+    matchLabels:
+      app: notes
+  template:
+    metadata:
+      labels:
+        app: notes
+    spec:
+      volumes:
+        - name: firestore-key
+          secret:
+            secretName: firestore-key
+      terminationGracePeriodSeconds: 5
+      containers:
+      - name: server
+        image:  gcr.io/notesdb/notes:v0.0.3
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: firestore-key
+          mountPath: /var/secrets/google
+        env:
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: /var/secrets/google/key.json
