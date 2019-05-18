@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
+	"github.com/dgrijalva/jwt-go"
 	"github.com/mitchellh/mapstructure"
 	"google.golang.org/api/iterator"
 	"io"
@@ -13,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -21,11 +24,21 @@ import (
 var (
 	client *firestore.Client
 	err    error
+	// jwtKey
+	// actualU
 )
 
+var jwtKey = []byte("nycbagel")
+var actualU = "argonaut"
+
+type Claims struct {
+	Uuid string `json:"uuid"`
+	jwt.StandardClaims
+}
+
 type Note struct {
-	Note      string    `json:"note"`
-	Timestamp time.Time `json:"timestamp"`
+	Note      string `json:"note"`
+	Timestamp string `json:"timestamp"`
 }
 
 // AddNote takes a string, applies a timestamp, and writes to the DB
@@ -40,6 +53,8 @@ func HomeHandler(w http.ResponseWriter, r *http.Request) {
 func AddNoteHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+	w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
 
 	var note Note
 	err := json.NewDecoder(r.Body).Decode(&note)
@@ -48,10 +63,12 @@ func AddNoteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _, err = client.Collection("notes").Add(context.Background(), map[string]interface{}{
-		"timestamp": time.Now(),
-		"note":      note.Note,
-	})
+	n := Note{
+		Timestamp: time.Now().Format(time.RFC3339),
+		Note:      note.Note,
+	}
+
+	_, _, err = client.Collection("notes").Add(context.Background(), n)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		io.WriteString(w, err.Error())
@@ -82,6 +99,13 @@ func GetRandomNoteHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "application/json")
 
+	if err := validateJwt(r); err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, err.Error())
+		return
+	}
+
+	// actually do stuff
 	notes, err := getNotesHelper()
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -105,7 +129,7 @@ func main() {
 
 	// Add your routes as needed
 	r.HandleFunc("/", HomeHandler)
-	r.HandleFunc("/notes", AddNoteHandler).Methods("POST")
+	r.HandleFunc("/notes", AddNoteHandler).Methods("POST", "OPTIONS")
 	r.HandleFunc("/notes", GetNotesHandler).Methods("GET")
 	r.HandleFunc("/notes/random", GetRandomNoteHandler).Methods("GET")
 
@@ -172,4 +196,36 @@ func getNotesHelper() ([]Note, error) {
 		notes = append(notes, n)
 	}
 	return notes, nil
+}
+
+// JWT
+func validateJwt(r *http.Request) error {
+
+	reqToken := r.Header.Get("Authorization")
+	splitToken := strings.Split(reqToken, "Bearer")
+	if len(splitToken) < 2 {
+		return fmt.Errorf("could not parse token")
+	}
+	tknStr := splitToken[1]
+
+	fmt.Println(tknStr)
+	claims := &Claims{}
+
+	// verify signature
+	tkn, err := jwt.ParseWithClaims(tknStr, claims, func(token *jwt.Token) (interface{}, error) {
+		return jwtKey, nil
+	})
+	if err != nil {
+		return fmt.Errorf("err on Parse With Claims: %v", err)
+	}
+	if !tkn.Valid {
+		return fmt.Errorf("invalid token")
+	}
+
+	// verify claims
+	if claims.Uuid != actualU {
+		return fmt.Errorf("invalid uuid")
+	}
+	fmt.Println("valid JWT")
+	return nil
 }
