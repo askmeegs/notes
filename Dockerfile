@@ -1,17 +1,12 @@
-# Start from a Debian image with the latest version of Go installed
-# and a workspace (GOPATH) configured at /go.
 FROM golang
 
-# Copy the local package files to the container's workspace.
 ADD . $GOPATH/src/github.com/askmeegs/notes
 
-# Build the outyet command inside the container.
-# (You may fetch or manage dependencies here,
-# either manually or with a tool like "godep".)
+# Build 
 RUN go install github.com/askmeegs/notes
 
-# Run the outyet command by default when the container starts.
+# Run the server binary on container start 
 ENTRYPOINT /go/bin/notes
 
-# Document that the service listens on port 8080.
+# listen on 8080 
 EXPOSE 8080

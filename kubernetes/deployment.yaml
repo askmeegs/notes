@@ -15,9 +15,6 @@ spec:
         - name: firestore-key
           secret:
             secretName: firestore-key
-        # - name: notes-secret
-        #   secret:
-        #     secretName: notes-secret
       terminationGracePeriodSeconds: 5
       containers:
       - name: server
@@ -28,8 +25,6 @@ spec:
         volumeMounts:
         - name: firestore-key
           mountPath: /var/secrets/google
-        # - name: notes-secret
-        #   mountPath: /var/secrets/notes
         env:
         - name: GOOGLE_APPLICATION_CREDENTIALS
           value: /var/secrets/google/key.json
