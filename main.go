@@ -211,7 +211,6 @@ func main() {
 		log.Fatal("need password")
 	}
 	validCreds = map[string]string{username: password}
-	fmt.Printf("%#v", validCreds)
 
 	r := mux.NewRouter()
 
@@ -315,8 +314,6 @@ func validateJwt(r *http.Request) error {
 	if !tkn.Valid {
 		return fmt.Errorf("invalid token")
 	}
-
-	fmt.Printf("validing JWT with claims: %#v\n", claims)
 
 	// verify claims
 	if _, ok := validCreds[claims.Username]; !ok {
