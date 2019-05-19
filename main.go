@@ -22,12 +22,12 @@ import (
 )
 
 var (
-	client     *firestore.Client
-	err        error
-	jwtKey     []byte
-	validCreds map[string]string
+	client     *firestore.Client // DB connection, https://cloud.google.com/firestore/
+	jwtKey     []byte            //signing key for JWT tokens
+	validCreds map[string]string //database of users
 )
 
+// JWT Claims
 type Claims struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
@@ -39,6 +39,7 @@ type Credentials struct {
 	Password string `json:"password"`
 }
 
+// Data model. One note contains text, and created-time.
 type Note struct {
 	Note      string `json:"note"`
 	Timestamp string `json:"timestamp"`
@@ -66,20 +67,18 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// User must exist
 	if _, ok := validCreds[creds.Username]; !ok {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 
-	// Get the expected password from our in memory map
 	expectedPassword, ok := validCreds[creds.Username]
 	if !ok || expectedPassword != creds.Password {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 
-	expirationTime := time.Now().Add(5 * time.Minute)
+	expirationTime := time.Now().Add(30 * time.Minute)
 	claims := &Claims{
 		Username: creds.Username,
 		StandardClaims: jwt.StandardClaims{
@@ -87,18 +86,13 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	// Declare the token with the algorithm used for signing, and the claims
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	// Create the JWT string
 	tokenString, err := token.SignedString(jwtKey)
 	if err != nil {
 		fmt.Println(err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	fmt.Printf("🔒 user %s logged in\n", creds.Username)
-	// Finally, we set the client cookie for "token" as the JWT we just generated
-	// we also set an expiry time which is the same as the token itself
 	http.SetCookie(w, &http.Cookie{
 		Name:    "token",
 		Value:   tokenString,
@@ -163,8 +157,7 @@ func GetNotesHandler(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, string(output))
 }
 
-// GetRandomNotes returns 1 random note via query
-// TODO - avoid fetching all notes first
+// GetRandomNotes returns 1 random note
 func GetRandomNoteHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "application/json")
@@ -175,14 +168,13 @@ func GetRandomNoteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// actually do stuff
 	notes, err := getNotesHelper()
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		io.WriteString(w, err.Error())
 	}
 
-	rand.Seed(time.Now().Unix()) // initialize global pseudo random generator
+	rand.Seed(time.Now().Unix())
 	note := notes[rand.Intn(len(notes))]
 
 	output, _ := json.Marshal(note)
@@ -192,7 +184,7 @@ func GetRandomNoteHandler(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	var wait time.Duration
-	flag.DurationVar(&wait, "graceful-timeout", time.Second*15, "the duration for which the server gracefully wait for existing connections to finish - e.g. 15s or 1m")
+	flag.DurationVar(&wait, "graceful-timeout", time.Second*15, "graceful timeout")
 	flag.Parse()
 
 	// process env
@@ -222,8 +214,7 @@ func main() {
 	r.HandleFunc("/notes/random", GetRandomNoteHandler).Methods("GET")
 
 	srv := &http.Server{
-		Addr: "0.0.0.0:8080",
-		// Good practice to set timeouts to avoid Slowloris attacks.
+		Addr:         "0.0.0.0:8080",
 		WriteTimeout: time.Second * 15,
 		ReadTimeout:  time.Second * 15,
 		IdleTimeout:  time.Second * 60,
@@ -232,13 +223,14 @@ func main() {
 
 	log.Println("📝 NOTES SERVER STARTING....")
 	ctx := context.Background()
-	client, err = firestore.NewClient(ctx, "notesdb") //TODO - make notesdb a flag
+	var err error
+	client, err = firestore.NewClient(ctx, "notesdb")
 	if err != nil {
 		log.Fatalf("Failed to create firestore client: %v", err)
 	}
 	defer client.Close()
 
-	// Run our server in a goroutine so that it doesn't block.
+	//start server
 	go func() {
 		if err := srv.ListenAndServe(); err != nil {
 			log.Println(err)
@@ -246,22 +238,14 @@ func main() {
 	}()
 
 	c := make(chan os.Signal, 1)
-	// We'll accept graceful shutdowns when quit via SIGINT (Ctrl+C)
-	// SIGKILL, SIGQUIT or SIGTERM (Ctrl+/) will not be caught.
 	signal.Notify(c, os.Interrupt)
 
-	// Block until we receive our signal.
+	// Block until signal
 	<-c
 
-	// Create a deadline to wait for.
 	ctx, cancel := context.WithTimeout(context.Background(), wait)
 	defer cancel()
-	// Doesn't block if no connections, but will otherwise wait
-	// until the timeout deadline.
 	srv.Shutdown(ctx)
-	// Optionally, you could run srv.Shutdown in a goroutine and block on
-	// <-ctx.Done() if your application should wait for other services
-	// to finalize based on context cancellation.
 	log.Println("shutting down")
 	os.Exit(0)
 }
