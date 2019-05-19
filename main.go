@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
+	"github.com/dgrijalva/jwt-go"
 	"github.com/mitchellh/mapstructure"
 	"google.golang.org/api/iterator"
 	"io"
@@ -13,19 +15,33 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
 )
 
 var (
-	client *firestore.Client
-	err    error
+	client     *firestore.Client
+	err        error
+	jwtKey     []byte
+	validCreds map[string]string
 )
 
+type Claims struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+	jwt.StandardClaims
+}
+
+type Credentials struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
 type Note struct {
-	Note      string    `json:"note"`
-	Timestamp time.Time `json:"timestamp"`
+	Note      string `json:"note"`
+	Timestamp string `json:"timestamp"`
 }
 
 // AddNote takes a string, applies a timestamp, and writes to the DB
@@ -33,13 +49,76 @@ func HomeHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	io.WriteString(w, `"{"message": "this is the notes server"}"`)
+	io.WriteString(w, `"{"message": "you must log in to continue"}"`)
+}
+
+// Login takes a username/password and, if valid creds, returns a JWT cookie
+func LoginHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Content-Type", "application/json")
+
+	var creds Credentials
+
+	err := json.NewDecoder(r.Body).Decode(&creds)
+	if err != nil {
+		fmt.Println(err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	// User must exist
+	if _, ok := validCreds[creds.Username]; !ok {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	// Get the expected password from our in memory map
+	expectedPassword, ok := validCreds[creds.Username]
+	if !ok || expectedPassword != creds.Password {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	expirationTime := time.Now().Add(5 * time.Minute)
+	claims := &Claims{
+		Username: creds.Username,
+		StandardClaims: jwt.StandardClaims{
+			ExpiresAt: expirationTime.Unix(),
+		},
+	}
+
+	// Declare the token with the algorithm used for signing, and the claims
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	// Create the JWT string
+	tokenString, err := token.SignedString(jwtKey)
+	if err != nil {
+		fmt.Println(err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	fmt.Printf("🔒 user %s logged in\n", creds.Username)
+	// Finally, we set the client cookie for "token" as the JWT we just generated
+	// we also set an expiry time which is the same as the token itself
+	http.SetCookie(w, &http.Cookie{
+		Name:    "token",
+		Value:   tokenString,
+		Expires: expirationTime,
+	})
+
 }
 
 // AddNote takes a string, applies a timestamp, and writes to the DB
 func AddNoteHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+	w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+
+	if err := validateJwt(r); err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, err.Error())
+		return
+	}
 
 	var note Note
 	err := json.NewDecoder(r.Body).Decode(&note)
@@ -48,10 +127,12 @@ func AddNoteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _, err = client.Collection("notes").Add(context.Background(), map[string]interface{}{
-		"timestamp": time.Now(),
-		"note":      note.Note,
-	})
+	n := Note{
+		Timestamp: time.Now().Format(time.RFC3339),
+		Note:      note.Note,
+	}
+
+	_, _, err = client.Collection("notes").Add(context.Background(), n)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		io.WriteString(w, err.Error())
@@ -63,6 +144,12 @@ func AddNoteHandler(w http.ResponseWriter, r *http.Request) {
 func GetNotesHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "application/json")
+
+	if err := validateJwt(r); err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, err.Error())
+		return
+	}
 
 	notes, err := getNotesHelper()
 	if err != nil {
@@ -82,6 +169,13 @@ func GetRandomNoteHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "application/json")
 
+	if err := validateJwt(r); err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, err.Error())
+		return
+	}
+
+	// actually do stuff
 	notes, err := getNotesHelper()
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -101,11 +195,29 @@ func main() {
 	flag.DurationVar(&wait, "graceful-timeout", time.Second*15, "the duration for which the server gracefully wait for existing connections to finish - e.g. 15s or 1m")
 	flag.Parse()
 
+	// process env
+	signkey := os.Getenv("SIGNKEY")
+	if signkey == "" {
+		log.Fatal("need JWT sign key")
+	}
+	jwtKey = []byte(signkey)
+
+	username := os.Getenv("USERNAME")
+	if username == "" {
+		log.Fatal("need username")
+	}
+	password := os.Getenv("PASSWORD")
+	if username == "" {
+		log.Fatal("need password")
+	}
+	validCreds = map[string]string{username: password}
+
 	r := mux.NewRouter()
 
 	// Add your routes as needed
 	r.HandleFunc("/", HomeHandler)
-	r.HandleFunc("/notes", AddNoteHandler).Methods("POST")
+	r.HandleFunc("/login", LoginHandler).Methods("POST", "OPTIONS")
+	r.HandleFunc("/notes", AddNoteHandler).Methods("POST", "OPTIONS")
 	r.HandleFunc("/notes", GetNotesHandler).Methods("GET")
 	r.HandleFunc("/notes/random", GetRandomNoteHandler).Methods("GET")
 
@@ -172,4 +284,40 @@ func getNotesHelper() ([]Note, error) {
 		notes = append(notes, n)
 	}
 	return notes, nil
+}
+
+// JWT
+func validateJwt(r *http.Request) error {
+	// accept both Authorization: Bearer and Cookies
+	reqToken := r.Header.Get("Authorization")
+	splitToken := strings.Split(reqToken, "Bearer")
+	tknStr := ""
+	if len(splitToken) >= 2 {
+		tknStr = strings.TrimSpace(splitToken[1])
+	} else { // try cookie
+		c, err := r.Cookie("token")
+		if err != nil {
+			return err
+		}
+		tknStr = c.Value
+	}
+	claims := &Claims{}
+
+	// verify signature
+	tkn, err := jwt.ParseWithClaims(tknStr, claims, func(token *jwt.Token) (interface{}, error) {
+		return jwtKey, nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("err on Parse With Claims: %v", err)
+	}
+	if !tkn.Valid {
+		return fmt.Errorf("invalid token")
+	}
+
+	// verify claims
+	if _, ok := validCreds[claims.Username]; !ok {
+		return fmt.Errorf("invalid username")
+	}
+	return nil
 }

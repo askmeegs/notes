@@ -18,6 +18,14 @@
   version = "v0.39.0"
 
 [[projects]]
+  digest = "1:76dc72490af7174349349838f2fe118996381b31ea83243812a97e5a0fd5ed55"
+  name = "github.com/dgrijalva/jwt-go"
+  packages = ["."]
+  pruneopts = "UT"
+  revision = "06ea1031745cb8b3dab3f6a236daf2b0aa468b7e"
+  version = "v3.2.0"
+
+[[projects]]
   digest = "1:1d3ad0f6a57c08e2168089a64c34313930571fcbe5359d71c608a97ce504f7ca"
   name = "github.com/golang/protobuf"
   packages = [
@@ -258,6 +266,7 @@
   analyzer-version = 1
   input-imports = [
     "cloud.google.com/go/firestore",
+    "github.com/dgrijalva/jwt-go",
     "github.com/gorilla/mux",
     "github.com/mitchellh/mapstructure",
     "google.golang.org/api/iterator",

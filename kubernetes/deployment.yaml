@@ -15,16 +15,36 @@ spec:
         - name: firestore-key
           secret:
             secretName: firestore-key
+        # - name: notes-secret
+        #   secret:
+        #     secretName: notes-secret
       terminationGracePeriodSeconds: 5
       containers:
       - name: server
-        image:  gcr.io/notesdb/notes:v0.0.3
+        image:  gcr.io/notesdb/notes:v0.0.4
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
         volumeMounts:
         - name: firestore-key
           mountPath: /var/secrets/google
+        # - name: notes-secret
+        #   mountPath: /var/secrets/notes
         env:
         - name: GOOGLE_APPLICATION_CREDENTIALS
           value: /var/secrets/google/key.json
+        - name: SIGNKEY
+          valueFrom:
+            secretKeyRef:
+              name: notes-secret
+              key: signkey
+        - name: USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: notes-secret
+              key: username
+        - name: PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: notes-secret
+              key: password
