@@ -319,6 +319,5 @@ func validateJwt(r *http.Request) error {
 	if _, ok := validCreds[claims.Username]; !ok {
 		return fmt.Errorf("invalid username")
 	}
-
 	return nil
 }
